@@ -11,6 +11,7 @@
 # subprocess has a chance to attach, in which case perf outputs no profile.
 
 require_relative "../harness/harness-common"
+require 'fileutils'
 
 # Run $WARMUP_ITRS or 10 iterations of a given block. Then run $MIN_BENCH_ITRS
 # or `num_itrs_int` iterations of the block, attaching a perf command to the
@@ -32,11 +33,15 @@ def run_benchmark(num_itrs_hint, **, &blk)
   end
 
   # Start perf after warmup
+  perf_output_path = nil
   if ENV['PERF']
     cmd = ['perf', *ENV['PERF'].split(' '), '-p', Process.pid.to_s]
     if cmd[1] == 'record'
-      # Put perf.data in the same place, ignoring Dir.chdir
-      cmd.push('-o', File.expand_path('../perf.data', __dir__))
+      # Put perf.data in the same place, ignoring Dir.chdir.
+      # PERF_OUTPUT overrides the default filename if set.
+      output = ENV.fetch('PERF_OUTPUT', 'perf.data')
+      perf_output_path = File.expand_path("../#{output}", __dir__)
+      cmd.push('-o', perf_output_path)
     end
     pid = Process.spawn(*cmd)
     # _Race_: we, the parent process might finish before perf attaches.
@@ -54,5 +59,18 @@ ensure
   if pid
     Process.kill(:INT, pid)
     Process.wait(pid)
+  end
+
+  # Preserve the JIT perf map file alongside the perf output.
+  # Ruby writes /tmp/perf-<PID>.map when --yjit-perf or --zjit-perf is used.
+  # perf report needs this file to resolve JIT symbols, but it gets deleted
+  # when the Ruby process exits. Save it so later analysis can restore it.
+  if perf_output_path
+    perf_map = "/tmp/perf-#{Process.pid}.map"
+    if File.exist?(perf_map)
+      dest = "#{perf_output_path}.map"
+      FileUtils.cp(perf_map, dest)
+      warn "harness-perf: Saved perf map to #{dest}"
+    end
   end
 end

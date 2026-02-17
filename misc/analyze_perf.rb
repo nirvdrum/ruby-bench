@@ -13,6 +13,7 @@
 
 require 'optparse'
 require 'open3'
+require 'fileutils'
 
 class PerfAnalyzer
   PerfEntry = Struct.new(:overhead_pct, :samples, :command, :dso, :symbol_type, :symbol_name, :category, keyword_init: true)
@@ -46,6 +47,7 @@ class PerfAnalyzer
 
   def analyze
     check_prerequisites
+    @restored_perf_map = restore_perf_map
 
     entries = parse_perf_report
     if entries.empty?
@@ -63,6 +65,10 @@ class PerfAnalyzer
     print_jit_analysis(entries)
 
     generate_flamegraph if @options[:flamegraph]
+  ensure
+    if @restored_perf_map && File.exist?(@restored_perf_map)
+      File.delete(@restored_perf_map)
+    end
   end
 
   private
@@ -81,6 +87,24 @@ class PerfAnalyzer
       $stderr.puts "    --chruby 'ruby-master --zjit' --harness harness-perf lobsters"
       exit 1
     end
+  end
+
+  # Restore a saved perf map file so that `perf report` can resolve JIT symbols.
+  # Returns the restored path (for cleanup) or nil.
+  def restore_perf_map
+    saved_map = "#{@perf_data_path}.map"
+    return nil unless File.exist?(saved_map)
+
+    pid_line = `perf script -i #{@perf_data_path} 2>/dev/null | head -1`
+    pid = pid_line[/\S+\s+(\d+)/, 1]
+    return nil unless pid
+
+    target = "/tmp/perf-#{pid}.map"
+    return nil if File.exist?(target)
+
+    FileUtils.cp(saved_map, target)
+    $stderr.puts "analyze_perf: Restored perf map to #{target}"
+    target
   end
 
   def parse_perf_report
@@ -233,8 +257,13 @@ class PerfAnalyzer
 
     if jit_entries.empty?
       puts "No JIT-compiled code detected in this profile."
-      puts "If running with --zjit or --yjit, the JIT may not have compiled enough code"
-      puts "or perf map support may not be enabled."
+      puts "If running with --zjit or --yjit, this usually means the"
+      puts "/tmp/perf-<PID>.map file was lost before perf could resolve JIT symbols."
+      puts
+      puts "To fix this:"
+      puts "  1. Re-run the benchmark (the harness now saves .map files automatically)"
+      puts "  2. Or place the perf map file as <perf-data-file>.map next to the perf.data"
+      puts "  3. Make sure to pass --yjit-perf or --zjit-perf to enable perf map generation"
       return
     end
 
