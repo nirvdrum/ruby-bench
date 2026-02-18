@@ -35,6 +35,13 @@ class PerfAnalyzer
     { name: 'CRuby Pack',           pattern: /^(pack_)/ },
   ].freeze
 
+  # Categories that represent Ruby core library methods (as opposed to runtime
+  # infrastructure like VM core, GC, method dispatch, parse/compile).
+  CORE_LIBRARY_CATEGORIES = [
+    'CRuby String', 'CRuby Array', 'CRuby Hash', 'CRuby Object/Class',
+    'CRuby Numeric', 'CRuby Regexp', 'CRuby Encoding', 'CRuby IO', 'CRuby Pack',
+  ].freeze
+
   # Match perf report lines:
   #     26.22%         10314  ruby     ruby                  [.] rb_yjit_str_concat_codepoint
   # DSO can contain spaces (e.g., "[JIT] tid 224893"), so we anchor on the [.] or [k] marker.
@@ -60,6 +67,8 @@ class PerfAnalyzer
     puts
     print_category_breakdown(entries)
     puts
+    print_core_method_breakdown(entries) unless @options[:categories_only]
+    puts
     print_top_functions(entries) unless @options[:categories_only]
     puts
     print_jit_analysis(entries)
@@ -83,8 +92,9 @@ class PerfAnalyzer
       $stderr.puts "Error: #{@perf_data_path} not found."
       $stderr.puts
       $stderr.puts "Generate one with:"
-      $stderr.puts "  PERF='record -g --call-graph dwarf' ./run_benchmarks.rb \\"
-      $stderr.puts "    --chruby 'ruby-master --zjit' --harness harness-perf lobsters"
+      $stderr.puts "  PERF='record -g --call-graph dwarf' PERF_OUTPUT=perf-data/zjit-lobsters.data \\"
+      $stderr.puts "    ./run_benchmarks.rb -e '/path/to/ruby --zjit --zjit-perf' \\"
+      $stderr.puts "    --harness harness-perf --warmup 10 --bench 10 lobsters"
       exit 1
     end
   end
@@ -228,6 +238,48 @@ class PerfAnalyzer
     puts "%9.2f%%  %10s  Total" % [total, ""]
   end
 
+  def print_core_method_breakdown(entries)
+    limit = @options[:percent_limit]
+    core_top = @options[:core_top]
+
+    # Group entries by core library category
+    by_category = Hash.new { |h, k| h[k] = [] }
+    entries.each do |entry|
+      next unless CORE_LIBRARY_CATEGORIES.include?(entry.category)
+      by_category[entry.category] << entry
+    end
+
+    puts "--- Core Library Method Breakdown ---"
+
+    any_printed = false
+    CORE_LIBRARY_CATEGORIES.each do |cat_name|
+      funcs = by_category[cat_name]
+      next if funcs.nil? || funcs.empty?
+
+      total_pct = funcs.sum(&:overhead_pct)
+      next if total_pct < limit
+
+      any_printed = true
+      puts "  %-25s (total: %.2f%%)" % [cat_name, total_pct]
+      puts "    %-10s  %10s  %s" % ["Self%", "Samples", "Function"]
+      puts "  " + "-" * 70
+
+      visible = funcs.first(core_top)
+      visible.each do |entry|
+        puts "    %6.2f%%  %10d  %s" % [entry.overhead_pct, entry.samples, entry.symbol_name]
+      end
+
+      remaining = funcs[core_top..]
+      if remaining && !remaining.empty?
+        remaining_pct = remaining.sum(&:overhead_pct)
+        puts "    %6.2f%%  %10s  ... and %d more functions" % [remaining_pct, "", remaining.size]
+      end
+      puts
+    end
+
+    puts "  (no core library functions above threshold)" unless any_printed
+  end
+
   def print_top_functions(entries)
     top_n = @options[:top]
     limit = @options[:percent_limit]
@@ -348,7 +400,7 @@ end
 
 # --- CLI ---
 
-options = { top: 30, percent_limit: 0.05 }
+options = { top: 30, percent_limit: 0.05, core_top: 10 }
 
 parser = OptionParser.new do |opts|
   opts.banner = "Usage: #{$0} [options] [perf.data]"
@@ -362,6 +414,10 @@ parser = OptionParser.new do |opts|
 
   opts.on("-p", "--percent-limit PCT", Float, "Minimum overhead% to include (default: #{options[:percent_limit]})") do |v|
     options[:percent_limit] = v
+  end
+
+  opts.on("--core-top N", Integer, "Functions per core library category (default: #{options[:core_top]})") do |v|
+    options[:core_top] = v
   end
 
   opts.on("--flamegraph [FILE]", "Generate flamegraph SVG (default: flamegraph.svg)") do |v|

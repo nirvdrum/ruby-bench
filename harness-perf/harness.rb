@@ -5,6 +5,15 @@
 #
 #    $ PERF='record -e cycles' ruby -Iharness-perf benchmarks/fib.rb
 #
+# With run_benchmarks.rb (use -e to pass JIT flags, full path to ruby):
+#
+#    $ PERF='record -g --call-graph dwarf' PERF_OUTPUT=perf-data/yjit.data \
+#        ./run_benchmarks.rb -e '/path/to/ruby --yjit --yjit-perf' \
+#        --harness harness-perf --warmup 10 --bench 10 lobsters
+#
+# PERF_OUTPUT sets the output filename (default: perf.data). The harness also
+# saves any /tmp/perf-<PID>.map file alongside the output for later analysis.
+#
 # When recording with perf(1), make sure the benchmark runs long enough; you
 # can tweak the MIN_BENCH_ITRS environment variable to lengthen the run. A race
 # condition is possible where the benchmark finishes before the perf(1)

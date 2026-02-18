@@ -260,15 +260,40 @@ with the `--yjit-stats` command-line option:
 
 ### Using perf
 
-There is also a harness to use Linux perf. By default, it only runs a fixed number of iterations.
-If `PERF` environment variable is present, it starts the perf subcommand after warmup.
+There is a harness to use Linux perf. Use `--harness harness-perf` with
+`run_benchmarks.rb` to profile benchmarks. The `PERF` environment variable
+specifies the perf subcommand (started after warmup), and `PERF_OUTPUT`
+controls the output filename. Use `--warmup` and `--bench` to control
+the number of warmup and benchmark iterations.
 
 ```sh
-# Use `perf record` for both warmup and benchmark
-perf record ruby --yjit-perf=map -Iharness-perf benchmarks/railsbench/benchmark.rb
+# Profile YJIT on lobsters
+PERF='record -g --call-graph dwarf' PERF_OUTPUT=perf-data/yjit-lobsters.data \
+  ./run_benchmarks.rb \
+  -e '/path/to/ruby --yjit --yjit-perf' \
+  --harness harness-perf --warmup 10 --bench 10 lobsters
 
-# Use `perf record` only for benchmark
-PERF=record ruby --yjit-perf=map -Iharness-perf benchmarks/railsbench/benchmark.rb
+# Profile ZJIT on lobsters
+PERF='record -g --call-graph dwarf' PERF_OUTPUT=perf-data/zjit-lobsters.data \
+  ./run_benchmarks.rb \
+  -e '/path/to/ruby --zjit --zjit-perf' \
+  --harness harness-perf --warmup 10 --bench 10 lobsters
+```
+
+**Important:** The `-e` flag is required when passing JIT options. Without it,
+the quoted string is treated as a benchmark name filter and JIT flags are silently
+ignored. Use a full path to the Ruby binary (not `~`, which won't be expanded).
+
+You can also run the perf harness directly without `run_benchmarks.rb`:
+
+```sh
+PERF=record ruby --yjit-perf -Iharness-perf benchmarks/railsbench/benchmark.rb
+```
+
+Analyze the resulting perf data with:
+
+```sh
+ruby misc/analyze_perf.rb perf-data/yjit-lobsters.data
 ```
 
 This is the only harness that uses `run_benchmark`'s argument, `num_itrs_hint`.
