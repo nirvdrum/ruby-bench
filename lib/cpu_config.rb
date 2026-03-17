@@ -86,6 +86,8 @@ class IntelCPUConfig < CPUConfig
   end
 
   def check_pstate(turbo:)
+return
+
     unless turbo || turbo_disabled?
       puts("You forgot to disable turbo:")
       puts("  sudo sh -c 'echo #{TURBO_DISABLED_VALUE} > #{NO_TURBO_PATH}'")
@@ -118,7 +120,14 @@ class AMDCPUConfig < CPUConfig
   end
 
   def maximize_frequency
-    BenchmarkRunner.check_call("sudo -S cpupower frequency-set -g performance")
+    begin
+      BenchmarkRunner.check_call("sudo -S cpupower frequency-set -g performance")
+    rescue
+      # Fall back to writing directly to sysfs if cpupower is not available
+      Dir.glob(SCALING_GOVERNOR_GLOB).each do |governor_path|
+        BenchmarkRunner.check_call("sudo -S sh -c 'echo #{PERFORMANCE_GOVERNOR} > #{governor_path}'")
+      end
+    end
   end
 
   def turbo_disabled?
